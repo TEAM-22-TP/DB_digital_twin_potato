@@ -185,6 +185,26 @@ CREATE INDEX IF NOT EXISTS ix_sensors_station
 CREATE INDEX IF NOT EXISTS ix_sensors_sensor_type
   ON sensors (sensor_type_id);
 
+-- sensor_source_map: maps translator source identifiers to internal sensors
+CREATE TABLE IF NOT EXISTS sensor_source_map (
+  id bigserial PRIMARY KEY,
+  sensor_id uuid NOT NULL REFERENCES sensors(id) ON DELETE CASCADE,
+  endpoint text NOT NULL,
+  node_id text NOT NULL,
+  browse_path text,
+  mqtt_topic text,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT uq_sensor_source_endpoint_node UNIQUE (endpoint, node_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_sensor_source_map_sensor
+  ON sensor_source_map (sensor_id);
+
+CREATE INDEX IF NOT EXISTS ix_sensor_source_map_active
+  ON sensor_source_map (is_active);
+
 -- station_variables: controllable machine/link variables that workers can set
 CREATE TABLE IF NOT EXISTS station_variables (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -99,6 +99,17 @@ class runs {
    overrides: jsonb
    id: uuid
 }
+class sensor_source_map {
+   sensor_id: uuid
+   endpoint: text
+   node_id: text
+   browse_path: text
+   mqtt_topic: text
+   is_active: boolean
+   created_at: timestamp with time zone
+   updated_at: timestamp with time zone
+   id: bigint
+}
 class sensor_types {
    name: text
    unit: text
@@ -162,6 +173,7 @@ run_stations            -[#595959,plain]-^  runs                   : "run_id:id"
 run_stations            -[#595959,plain]-^  stations               : "station_id:id"
 runs                    -[#595959,plain]-^  factory_configurations : "config_id:id"
 runs                    -[#595959,plain]-^  lots                   : "lot_id:id"
+sensor_source_map       -[#595959,plain]-^  sensors                : "sensor_id:id"
 sensors                 -[#595959,plain]-^  sensor_types           : "sensor_type_id:id"
 sensors                 -[#595959,plain]-^  stations               : "station_id:id"
 station_variables       -[#595959,plain]-^  stations               : "station_id:id"

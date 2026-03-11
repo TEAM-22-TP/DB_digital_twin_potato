@@ -49,6 +49,10 @@ Snapshot stanic pre konkretny run (aby historia sedela, aj ked sa konfiguracia n
 Katalog typov senzorov a konkretne senzory na staniciach.
 Data typ senzora je: `numeric`, `text`, `boolean`.
 
+## `sensor_source_map`
+Mapovanie zdroja z translacnej vrstvy na interny `sensor_id`.
+Pouziva sa hlavne kombinacia `endpoint + node_id`.
+
 ## `measurements`
 Surove merania zo senzorov (timestamp + hodnota).
 Je to Timescale hypertable (optimalizovane na velke casove rady).
@@ -94,12 +98,14 @@ Ma jednoduchu rolu:
 ### Flow C: ingest merani
 1. Translacna vrstva cita data z PLC/OPC-UA.
 2. Posiela ich do message brokeru (napr. MQTT/Kafka/NATS), nie priamo cez REST.
-3. Ingest worker cita spravy z topicu a dava batch insert do `measurements`.
-4. Timescale automaticky buduje agregacie v `measurements_1m`.
+3. Ingest worker cez `sensor_source_map` premapuje `endpoint + node_id` na `sensor_id`.
+4. Ingest worker dava batch insert do `measurements`.
+5. Timescale automaticky buduje agregacie v `measurements_1m`.
 
 Poznamka:
 - trigger kontroluje, ze typ hodnoty sedi na typ senzora
   (numeric/text/boolean).
+- primarna realtime cesta je broker + ingest worker (nie REST endpoint per meranie).
 
 ### Flow D: operator zmeni parameter
 1. API vytvori `control_commands` so statusom `requested`.
@@ -219,6 +225,21 @@ Volitelne (fallback/backfill) mozes mat REST endpoint:
 
 ### `POST /api/measurements/bulk` (optional)
 Pouzit len na backfill alebo servisne importy, nie ako hlavny realtime ingest.
+
+## Ingest worker (prakticky)
+
+Implementacia je v:
+- `/Users/romankosik/VsProjects/TP/ingest_worker/worker.py`
+
+Dokumentacia a spustenie:
+- `/Users/romankosik/VsProjects/TP/ingest_worker/README.md`
+
+Vstup:
+- MQTT spravy z `plant.measurements.raw`
+
+Vystup:
+- normalizovane riadky v `measurements`
+- chybne spravy do DLQ topicu (`plant.measurements.dlq`)
 
 ## Ovladanie
 
