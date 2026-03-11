@@ -8,7 +8,7 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE sensor_data_type AS ENUM ('numeric','text');
+  CREATE TYPE sensor_data_type AS ENUM ('numeric','text','boolean');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
@@ -16,7 +16,11 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE control_command_status AS ENUM ('requested','validated','sent','acknowledged','rejected','failed','cancelled');
+  CREATE TYPE control_command_status AS ENUM ('requested','applied','failed','cancelled');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE auth_user_role AS ENUM ('viewer','operator','admin');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- auth schema
@@ -27,6 +31,7 @@ CREATE TABLE IF NOT EXISTS auth.users (
   username text NOT NULL,
   email text NOT NULL,
   password_hash text NOT NULL,
+  role auth_user_role NOT NULL DEFAULT 'viewer',
   is_active boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
@@ -38,47 +43,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_auth_users_username
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_auth_users_email
   ON auth.users (email);
-
-CREATE TABLE IF NOT EXISTS auth.roles (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  code text NOT NULL,
-  name text NOT NULL,
-  description text,
-  is_system boolean NOT NULL DEFAULT false,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT uq_auth_roles_code UNIQUE (code)
-);
-
-CREATE TABLE IF NOT EXISTS auth.permissions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  code text NOT NULL,
-  name text NOT NULL,
-  description text,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT uq_auth_permissions_code UNIQUE (code)
-);
-
-CREATE TABLE IF NOT EXISTS auth.user_roles (
-  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  role_id uuid NOT NULL REFERENCES auth.roles(id) ON DELETE CASCADE,
-  assigned_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
-  assigned_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (user_id, role_id)
-);
-
-CREATE INDEX IF NOT EXISTS ix_auth_user_roles_role
-  ON auth.user_roles (role_id);
-
-CREATE TABLE IF NOT EXISTS auth.role_permissions (
-  role_id uuid NOT NULL REFERENCES auth.roles(id) ON DELETE CASCADE,
-  permission_id uuid NOT NULL REFERENCES auth.permissions(id) ON DELETE CASCADE,
-  granted_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
-  granted_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (role_id, permission_id)
-);
-
-CREATE INDEX IF NOT EXISTS ix_auth_role_permissions_permission
-  ON auth.role_permissions (permission_id);
 
 -- recipes
 CREATE TABLE IF NOT EXISTS recipes (
@@ -152,7 +116,6 @@ CREATE TABLE IF NOT EXISTS lots (
 CREATE TABLE IF NOT EXISTS runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   config_id uuid NOT NULL REFERENCES factory_configurations(id) ON DELETE RESTRICT,
-  recipe_id uuid NOT NULL REFERENCES recipes(id) ON DELETE RESTRICT,
   lot_id uuid REFERENCES lots(id) ON DELETE SET NULL,
   started_at timestamptz NOT NULL,
   ended_at timestamptz,
@@ -163,9 +126,6 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE INDEX IF NOT EXISTS ix_runs_config_started
   ON runs (config_id, started_at DESC);
-
-CREATE INDEX IF NOT EXISTS ix_runs_recipe_started
-  ON runs (recipe_id, started_at DESC);
 
 CREATE INDEX IF NOT EXISTS ix_runs_lot_started
   ON runs (lot_id, started_at DESC);
@@ -252,67 +212,32 @@ CREATE INDEX IF NOT EXISTS ix_station_variables_station
 CREATE TABLE IF NOT EXISTS control_commands (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid REFERENCES runs(id) ON DELETE SET NULL,
-  station_id uuid NOT NULL REFERENCES stations(id) ON DELETE RESTRICT,
   station_variable_id uuid NOT NULL REFERENCES station_variables(id) ON DELETE RESTRICT,
-  requested_by text NOT NULL,
+  requested_by_user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE RESTRICT,
   requested_at timestamptz NOT NULL DEFAULT now(),
-  source text NOT NULL DEFAULT 'ui',
   status control_command_status NOT NULL DEFAULT 'requested',
   requested_numeric double precision,
   requested_text text,
-  validated_by text,
-  validated_at timestamptz,
-  applied_numeric double precision,
-  applied_text text,
+  requested_boolean boolean,
   applied_at timestamptz,
-  acknowledged_by text,
-  acknowledged_at timestamptz,
-  rejection_reason text,
   error_message text,
-  correlation_id uuid NOT NULL DEFAULT gen_random_uuid(),
   payload jsonb NOT NULL DEFAULT '{}'::jsonb,
   CONSTRAINT chk_control_requested_oneof CHECK (
-    ((requested_numeric IS NOT NULL)::int + (requested_text IS NOT NULL)::int) = 1
-  ),
-  CONSTRAINT chk_control_applied_oneof CHECK (
-    ((applied_numeric IS NOT NULL)::int + (applied_text IS NOT NULL)::int) <= 1
+    ((requested_numeric IS NOT NULL)::int + (requested_text IS NOT NULL)::int + (requested_boolean IS NOT NULL)::int) = 1
   ),
   CONSTRAINT chk_control_time_order CHECK (
-    (validated_at IS NULL OR validated_at >= requested_at)
-    AND (applied_at IS NULL OR applied_at >= requested_at)
-    AND (acknowledged_at IS NULL OR acknowledged_at >= requested_at)
+    (applied_at IS NULL OR applied_at >= requested_at)
   )
 );
 
 CREATE INDEX IF NOT EXISTS ix_control_commands_status_requested
   ON control_commands (status, requested_at DESC);
 
-CREATE INDEX IF NOT EXISTS ix_control_commands_station_requested
-  ON control_commands (station_id, requested_at DESC);
-
 CREATE INDEX IF NOT EXISTS ix_control_commands_run_requested
   ON control_commands (run_id, requested_at DESC);
 
 CREATE INDEX IF NOT EXISTS ix_control_commands_variable_requested
   ON control_commands (station_variable_id, requested_at DESC);
-
--- control_command_audit: immutable command lifecycle log
-CREATE TABLE IF NOT EXISTS control_command_audit (
-  id bigserial PRIMARY KEY,
-  command_id uuid NOT NULL REFERENCES control_commands(id) ON DELETE CASCADE,
-  ts timestamptz NOT NULL DEFAULT now(),
-  actor text,
-  old_status control_command_status,
-  new_status control_command_status NOT NULL,
-  note text,
-  payload jsonb NOT NULL DEFAULT '{}'::jsonb
-);
-
-CREATE INDEX IF NOT EXISTS ix_control_command_audit_command_ts
-  ON control_command_audit (command_id, ts DESC);
-
-CREATE INDEX IF NOT EXISTS ix_control_command_audit_ts
-  ON control_command_audit (ts DESC);
 
 -- measurements (Timescale hypertable)
 CREATE TABLE IF NOT EXISTS measurements (
@@ -322,6 +247,7 @@ CREATE TABLE IF NOT EXISTS measurements (
   run_id uuid REFERENCES runs(id) ON DELETE SET NULL,
   value_numeric double precision,
   value_text text,
+  value_boolean boolean,
   quality_flag quality_flag_enum NOT NULL DEFAULT 'ok',
   payload jsonb NOT NULL DEFAULT '{}'::jsonb,
   CONSTRAINT chk_measure_value_valid CHECK (
@@ -329,11 +255,12 @@ CREATE TABLE IF NOT EXISTS measurements (
       quality_flag = 'missing'
       AND value_numeric IS NULL
       AND value_text IS NULL
+      AND value_boolean IS NULL
     )
     OR
     (
       quality_flag IS DISTINCT FROM 'missing'
-      AND ((value_numeric IS NOT NULL)::int + (value_text IS NOT NULL)::int) = 1
+      AND ((value_numeric IS NOT NULL)::int + (value_text IS NOT NULL)::int + (value_boolean IS NOT NULL)::int) = 1
     )
   )
 );
@@ -427,34 +354,6 @@ ALTER TABLE run_events SET (
 SELECT add_compression_policy('run_events', INTERVAL '30 days', if_not_exists => TRUE);
 SELECT add_retention_policy('run_events', INTERVAL '365 days', if_not_exists => TRUE);
 
--- Guard: runs.recipe_id must match factory_configurations.recipe_id
-CREATE OR REPLACE FUNCTION enforce_run_recipe_matches_config()
-RETURNS trigger AS $$
-DECLARE cfg_recipe uuid;
-BEGIN
-  SELECT recipe_id INTO cfg_recipe
-  FROM factory_configurations
-  WHERE id = NEW.config_id;
-
-  IF cfg_recipe IS NULL THEN
-    RAISE EXCEPTION 'Configuration % has no recipe_id', NEW.config_id;
-  END IF;
-
-  IF NEW.recipe_id <> cfg_recipe THEN
-    RAISE EXCEPTION 'runs.recipe_id (%) does not match configuration.recipe_id (%)', NEW.recipe_id, cfg_recipe;
-  END IF;
-
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS trg_runs_recipe_guard ON runs;
-
-CREATE TRIGGER trg_runs_recipe_guard
-BEFORE INSERT OR UPDATE OF config_id, recipe_id ON runs
-FOR EACH ROW
-EXECUTE FUNCTION enforce_run_recipe_matches_config();
-
 -- Guard: sensor value type must match sensor_types.data_type
 CREATE OR REPLACE FUNCTION enforce_measurement_sensor_type()
 RETURNS trigger AS $$
@@ -473,6 +372,9 @@ BEGIN
     IF NEW.value_text IS NOT NULL THEN
       RAISE EXCEPTION 'Sensor % expects numeric values only', NEW.sensor_id;
     END IF;
+    IF NEW.value_boolean IS NOT NULL THEN
+      RAISE EXCEPTION 'Sensor % expects numeric values only', NEW.sensor_id;
+    END IF;
 
     IF NEW.quality_flag IS DISTINCT FROM 'missing' AND NEW.value_numeric IS NULL THEN
       RAISE EXCEPTION 'Sensor % expects value_numeric when quality_flag is not missing', NEW.sensor_id;
@@ -481,9 +383,20 @@ BEGIN
     IF NEW.value_numeric IS NOT NULL THEN
       RAISE EXCEPTION 'Sensor % expects text values only', NEW.sensor_id;
     END IF;
+    IF NEW.value_boolean IS NOT NULL THEN
+      RAISE EXCEPTION 'Sensor % expects text values only', NEW.sensor_id;
+    END IF;
 
     IF NEW.quality_flag IS DISTINCT FROM 'missing' AND NEW.value_text IS NULL THEN
       RAISE EXCEPTION 'Sensor % expects value_text when quality_flag is not missing', NEW.sensor_id;
+    END IF;
+  ELSIF expected_type = 'boolean' THEN
+    IF NEW.value_numeric IS NOT NULL OR NEW.value_text IS NOT NULL THEN
+      RAISE EXCEPTION 'Sensor % expects boolean values only', NEW.sensor_id;
+    END IF;
+
+    IF NEW.quality_flag IS DISTINCT FROM 'missing' AND NEW.value_boolean IS NULL THEN
+      RAISE EXCEPTION 'Sensor % expects value_boolean when quality_flag is not missing', NEW.sensor_id;
     END IF;
   END IF;
 
@@ -494,7 +407,7 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_measurements_sensor_type_guard ON measurements;
 
 CREATE TRIGGER trg_measurements_sensor_type_guard
-BEFORE INSERT OR UPDATE OF sensor_id, value_numeric, value_text, quality_flag ON measurements
+BEFORE INSERT OR UPDATE OF sensor_id, value_numeric, value_text, value_boolean, quality_flag ON measurements
 FOR EACH ROW
 EXECUTE FUNCTION enforce_measurement_sensor_type();
 
@@ -517,17 +430,13 @@ BEGIN
     RAISE EXCEPTION 'Unknown station_variable_id %', NEW.station_variable_id;
   END IF;
 
-  IF NEW.station_id <> variable_station_id THEN
-    RAISE EXCEPTION 'control_commands.station_id % must match station_variables.station_id %', NEW.station_id, variable_station_id;
-  END IF;
-
   IF NOT variable_writable THEN
     RAISE EXCEPTION 'station_variable % is read-only', NEW.station_variable_id;
   END IF;
 
   IF variable_type = 'numeric' THEN
-    IF NEW.requested_numeric IS NULL OR NEW.requested_text IS NOT NULL THEN
-      RAISE EXCEPTION 'Numeric variable requires requested_numeric and forbids requested_text';
+    IF NEW.requested_numeric IS NULL OR NEW.requested_text IS NOT NULL OR NEW.requested_boolean IS NOT NULL THEN
+      RAISE EXCEPTION 'Numeric variable requires requested_numeric and forbids requested_text/requested_boolean';
     END IF;
 
     IF variable_min IS NOT NULL AND NEW.requested_numeric < variable_min THEN
@@ -538,29 +447,20 @@ BEGIN
       RAISE EXCEPTION 'requested_numeric % is above max_value %', NEW.requested_numeric, variable_max;
     END IF;
 
-    IF NEW.applied_text IS NOT NULL THEN
-      RAISE EXCEPTION 'Numeric variable cannot store applied_text';
-    END IF;
   ELSIF variable_type = 'text' THEN
-    IF NEW.requested_text IS NULL OR NEW.requested_numeric IS NOT NULL THEN
-      RAISE EXCEPTION 'Text variable requires requested_text and forbids requested_numeric';
+    IF NEW.requested_text IS NULL OR NEW.requested_numeric IS NOT NULL OR NEW.requested_boolean IS NOT NULL THEN
+      RAISE EXCEPTION 'Text variable requires requested_text and forbids requested_numeric/requested_boolean';
     END IF;
 
-    IF NEW.applied_numeric IS NOT NULL THEN
-      RAISE EXCEPTION 'Text variable cannot store applied_numeric';
+  ELSIF variable_type = 'boolean' THEN
+    IF NEW.requested_boolean IS NULL OR NEW.requested_numeric IS NOT NULL OR NEW.requested_text IS NOT NULL THEN
+      RAISE EXCEPTION 'Boolean variable requires requested_boolean and forbids requested_numeric/requested_text';
     END IF;
+
   END IF;
 
-  IF NEW.status = 'validated' AND NEW.validated_at IS NULL THEN
-    NEW.validated_at := now();
-  END IF;
-
-  IF NEW.status = 'acknowledged' AND NEW.acknowledged_at IS NULL THEN
-    NEW.acknowledged_at := now();
-  END IF;
-
-  IF NEW.status = 'acknowledged' AND NEW.applied_at IS NULL THEN
-    NEW.applied_at := NEW.acknowledged_at;
+  IF NEW.status = 'applied' AND NEW.applied_at IS NULL THEN
+    NEW.applied_at := now();
   END IF;
 
   RETURN NEW;
@@ -573,60 +473,3 @@ CREATE TRIGGER trg_control_commands_validity
 BEFORE INSERT OR UPDATE ON control_commands
 FOR EACH ROW
 EXECUTE FUNCTION enforce_control_command_validity();
-
--- Audit every command lifecycle status change
-CREATE OR REPLACE FUNCTION audit_control_command_status_change()
-RETURNS trigger AS $$
-BEGIN
-  IF TG_OP = 'INSERT' THEN
-    INSERT INTO control_command_audit (
-      command_id,
-      actor,
-      old_status,
-      new_status,
-      note,
-      payload
-    ) VALUES (
-      NEW.id,
-      NEW.requested_by,
-      NULL,
-      NEW.status,
-      NULL,
-      jsonb_build_object('source', NEW.source, 'correlation_id', NEW.correlation_id)
-    );
-
-    RETURN NEW;
-  END IF;
-
-  IF TG_OP = 'UPDATE' AND NEW.status IS DISTINCT FROM OLD.status THEN
-    INSERT INTO control_command_audit (
-      command_id,
-      actor,
-      old_status,
-      new_status,
-      note,
-      payload
-    ) VALUES (
-      NEW.id,
-      COALESCE(NEW.acknowledged_by, NEW.validated_by, NEW.requested_by),
-      OLD.status,
-      NEW.status,
-      CASE
-        WHEN NEW.status = 'rejected' THEN NEW.rejection_reason
-        WHEN NEW.status = 'failed' THEN NEW.error_message
-        ELSE NULL
-      END,
-      jsonb_build_object('source', NEW.source, 'correlation_id', NEW.correlation_id)
-    );
-  END IF;
-
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS trg_control_commands_audit ON control_commands;
-
-CREATE TRIGGER trg_control_commands_audit
-AFTER INSERT OR UPDATE OF status ON control_commands
-FOR EACH ROW
-EXECUTE FUNCTION audit_control_command_status_change();

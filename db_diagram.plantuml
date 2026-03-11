@@ -1,0 +1,168 @@
+@startuml
+
+!theme plain
+top to bottom direction
+skinparam linetype ortho
+
+class configuration_stations {
+   config_id: uuid
+   station_id: uuid
+   sequence_order: integer
+   enabled: boolean
+   params: jsonb
+   id: uuid
+}
+class control_commands {
+   run_id: uuid
+   station_variable_id: uuid
+   requested_by_user_id: uuid
+   requested_at: timestamp with time zone
+   status: control_command_status
+   requested_numeric: double precision
+   requested_text: text
+   requested_boolean: boolean
+   applied_at: timestamp with time zone
+   error_message: text
+   payload: jsonb
+   id: uuid
+}
+class factory_configurations {
+   recipe_id: uuid
+   name: text
+   created_at: timestamp with time zone
+   author: text
+   notes: text
+   is_active: boolean
+   id: uuid
+}
+class lots {
+   lot_code: text
+   product: text
+   created_at: timestamp with time zone
+   notes: text
+   id: uuid
+}
+class measurements {
+   ingest_id: bigint
+   ts: timestamp with time zone
+   sensor_id: uuid
+   run_id: uuid
+   value_numeric: double precision
+   value_text: text
+   value_boolean: boolean
+   quality_flag: quality_flag_enum
+   payload: jsonb
+}
+class measurements_1m {
+   bucket_1m: timestamp with time zone
+   sensor_id: uuid
+   run_id: uuid
+   avg_numeric: double precision
+   min_numeric: double precision
+   max_numeric: double precision
+   sample_count: bigint
+   non_ok_samples: bigint
+}
+class recipes {
+   code: text
+   name: text
+   version: integer
+   created_at: timestamp with time zone
+   author: text
+   description: text
+   targets: jsonb
+   is_active: boolean
+   id: uuid
+}
+class run_events {
+   event_id: bigint
+   run_id: uuid
+   ts: timestamp with time zone
+   event_type: text
+   details: jsonb
+}
+class run_stations {
+   run_id: uuid
+   station_id: uuid
+   sequence_order: integer
+   enabled: boolean
+   params: jsonb
+   source_config_station_id: uuid
+   id: uuid
+}
+class runs {
+   config_id: uuid
+   lot_id: uuid
+   started_at: timestamp with time zone
+   ended_at: timestamp with time zone
+   status: run_status
+   overrides: jsonb
+   id: uuid
+}
+class sensor_types {
+   name: text
+   unit: text
+   data_type: sensor_data_type
+   description: text
+   id: uuid
+}
+class sensors {
+   station_id: uuid
+   sensor_type_id: uuid
+   name: text
+   is_active: boolean
+   config: jsonb
+   id: uuid
+}
+class station_variables {
+   station_id: uuid
+   variable_key: text
+   display_name: text
+   data_type: sensor_data_type
+   unit: text
+   min_value: double precision
+   max_value: double precision
+   is_writable: boolean
+   metadata: jsonb
+   id: uuid
+}
+class stations {
+   name: text
+   type: text
+   location_zone: text
+   status: station_status
+   metadata: jsonb
+   id: uuid
+}
+class users {
+   username: text
+   email: text
+   password_hash: text
+   role: auth_user_role
+   is_active: boolean
+   created_at: timestamp with time zone
+   updated_at: timestamp with time zone
+   last_login_at: timestamp with time zone
+   id: uuid
+}
+
+configuration_stations  -[#595959,plain]-^  factory_configurations : "config_id:id"
+configuration_stations  -[#595959,plain]-^  stations               : "station_id:id"
+control_commands        -[#595959,plain]-^  runs                   : "run_id:id"
+control_commands        -[#595959,plain]-^  station_variables      : "station_variable_id:id"
+control_commands        -[#595959,plain]-^  users                  : "requested_by_user_id:id"
+factory_configurations  -[#595959,plain]-^  recipes                : "recipe_id:id"
+measurements            -[#595959,plain]-^  runs                   : "run_id:id"
+measurements            -[#595959,plain]-^  sensors                : "sensor_id:id"
+measurements_1m         -[#595959,plain]-^  runs                   : "run_id:id"
+measurements_1m         -[#595959,plain]-^  sensors                : "sensor_id:id"
+run_events              -[#595959,plain]-^  runs                   : "run_id:id"
+run_stations            -[#595959,plain]-^  configuration_stations : "source_config_station_id:id"
+run_stations            -[#595959,plain]-^  runs                   : "run_id:id"
+run_stations            -[#595959,plain]-^  stations               : "station_id:id"
+runs                    -[#595959,plain]-^  factory_configurations : "config_id:id"
+runs                    -[#595959,plain]-^  lots                   : "lot_id:id"
+sensors                 -[#595959,plain]-^  sensor_types           : "sensor_type_id:id"
+sensors                 -[#595959,plain]-^  stations               : "station_id:id"
+station_variables       -[#595959,plain]-^  stations               : "station_id:id"
+@enduml
