@@ -119,7 +119,8 @@ class IngestWorker:
             logging.info("Closed PostgreSQL connection")
 
     def on_connect(self, client: mqtt.Client, _userdata: Any, _flags: Any, reason_code: Any, _properties: Any) -> None:
-        if int(reason_code) != 0:
+        rc = reason_code.value if hasattr(reason_code, 'value') else int(reason_code)
+        if rc != 0:
             logging.error("MQTT connect failed: rc=%s", reason_code)
             return
         client.subscribe(self.settings.mqtt_topic, qos=self.settings.mqtt_qos)
@@ -173,19 +174,22 @@ class IngestWorker:
 
     def normalize_message(self, payload: bytes) -> Optional[tuple[Any, ...]]:
         data = json.loads(payload)
-        source = data.get("payload", {}).get("source", {})
+        # Handle both formats:
+        # Format 1: {endpoint, node_id, value_json, ...}
+        # Format 2 (translation-layer): {timestamp_ms, source: {endpoint, node_id, browse_path}, value, ...}
+        source = data.get("source", {})
 
         endpoint = data.get("endpoint") or source.get("endpoint")
         node_id = data.get("node_id") or source.get("node_id")
         if not endpoint or not node_id:
             raise ValueError("Missing endpoint or node_id")
 
-        ts = parse_ts(data.get("ts"))
-        raw_value = data.get("value_json", data.get("payload", {}).get("value"))
+        ts = parse_ts(data.get("ts") or data.get("timestamp_ms"))
+        raw_value = data.get("value_json") or data.get("value")
         value_numeric, value_text, value_boolean = normalize_value(raw_value)
 
         quality_flag = data.get("quality_flag") or "ok"
-        run_id = data.get("run_id") or data.get("payload", {}).get("run_id")
+        run_id = data.get("run_id")
 
         sensor_id = self.resolve_sensor_id(endpoint, node_id)
         if not sensor_id:
